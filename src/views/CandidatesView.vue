@@ -59,7 +59,7 @@
       <div class="popup-content" @click.stop>
         <button class="close-btn" @click="closePopup">×</button>
         <h3>{{ selectedCandidate.name }}</h3>
-        <img :src="selectedCandidate.imageUrl" alt="Candidate Image" class="candidate-image" />
+        <img :src="candidate.imageUrl" alt="Candidate Image" class="candidate-image" />
         <p><strong>Party:</strong> {{ selectedCandidate.party }}</p>
         <p><strong>Description:</strong> {{ selectedCandidate.description }}</p>
         <p><strong>Votes:</strong> {{ selectedCandidate.voteCount }}</p>
@@ -151,7 +151,6 @@ export default {
       isAuthenticated: false,
       showRegister: false,
       hasVoted: false,
-      token: null,
       loginData: {
         cnp: '',
       },
@@ -193,6 +192,7 @@ export default {
   },
   computed: {
     chartData() {
+      // Calculate vote distribution
       const partyVotes = this.candidates.reduce((acc, candidate) => {
         acc[candidate.party] = (acc[candidate.party] || 0) + candidate.voteCount
         return acc
@@ -225,11 +225,10 @@ export default {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.loginData),
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to login')
-        const { token, hasVoted } = await response.json()
-        this.token = token
-        localStorage.setItem('jwt', token)
+        const { hasVoted } = await response.json()
         this.isAuthenticated = true
         this.hasVoted = hasVoted
         await this.fetchCandidates()
@@ -245,11 +244,9 @@ export default {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.registerData),
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to register')
-        const { token } = await response.json()
-        this.token = token
-        localStorage.setItem('jwt', token)
         this.isAuthenticated = true
         this.showRegister = false
         await this.fetchCandidates()
@@ -263,17 +260,12 @@ export default {
       try {
         const response = await fetch(`${BACKEND_URL}/api/logout`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.token}`,
-          },
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to logout')
         this.isAuthenticated = false
         this.candidates = []
         this.hasVoted = false
-        this.token = null
-        localStorage.removeItem('jwt')
         if (this.ws) {
           this.ws.close()
         }
@@ -285,54 +277,36 @@ export default {
     async fetchCandidates() {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates`, {
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-          },
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to fetch candidates')
         this.candidates = await response.json()
       } catch (error) {
         console.error('Error fetching candidates:', error)
         this.isAuthenticated = false
-        localStorage.removeItem('jwt')
       }
     },
     async checkSession() {
-      const token = localStorage.getItem('jwt')
-      if (!token) {
-        this.isAuthenticated = false
-        return
-      }
       try {
         const response = await fetch(`${BACKEND_URL}/api/check-session`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Session check failed')
         const { isAuthenticated, hasVoted } = await response.json()
         this.isAuthenticated = isAuthenticated
         this.hasVoted = hasVoted
-        this.token = token
         if (isAuthenticated) {
           await this.fetchCandidates()
           this.connectWebSocket()
-        } else {
-          localStorage.removeItem('jwt')
         }
       } catch (error) {
         console.error('Error checking session:', error)
         this.isAuthenticated = false
-        localStorage.removeItem('jwt')
       }
     },
     connectWebSocket() {
-      const wsUrl = BACKEND_URL.replace('https', 'wss')
-      this.ws = new WebSocket(wsUrl, [], {
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-        },
-      })
+      const wsUrl = BACKEND_URL.replace('http', 'ws')
+      this.ws = new WebSocket(wsUrl)
 
       this.ws.onopen = () => {
         console.log('WebSocket connected')
@@ -375,11 +349,9 @@ export default {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.token}`,
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.newCandidate),
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to add candidate')
         this.closeAddPopup()
@@ -396,16 +368,14 @@ export default {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates/${this.editCandidate.id}`, {
           method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.token}`,
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name: this.editCandidate.name,
             party: this.editCandidate.party,
             description: this.editCandidate.description,
             imageUrl: this.editCandidate.imageUrl,
           }),
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to update candidate')
         this.closePopup()
@@ -418,9 +388,7 @@ export default {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates/${this.selectedCandidate.id}`, {
           method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-          },
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to delete candidate')
         this.closePopup()
@@ -433,9 +401,7 @@ export default {
       try {
         const response = await fetch(`${BACKEND_URL}/api/vote/${this.selectedCandidate.id}`, {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-          },
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to vote')
         this.hasVoted = true
@@ -449,9 +415,7 @@ export default {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates/generate`, {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.token}`,
-          },
+          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to generate candidate')
       } catch (error) {
@@ -483,7 +447,6 @@ export default {
   },
 }
 </script>
-
 <style scoped>
 .auth-container {
   display: flex;
@@ -579,4 +542,6 @@ export default {
   margin-top: 0.5rem;
   display: block;
 }
+
+/* Existing styles remain unchanged */
 </style>
