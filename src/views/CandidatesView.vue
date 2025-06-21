@@ -1,13 +1,40 @@
 <template>
-  <div class="candidates-container">
+  <div class="auth-container" v-if="!isAuthenticated">
+    <!-- Login Form -->
+    <div v-if="!showRegister" class="auth-form">
+      <h2>Login</h2>
+      <form @submit.prevent="login">
+        <label>
+          CNP:
+          <input v-model="loginData.cnp" type="text" pattern="\d{13}" required />
+        </label>
+        <button type="submit">Login</button>
+        <p>Don't have an account? <a @click="showRegister = true">Register</a></p>
+      </form>
+    </div>
+
+    <!-- Register Form -->
+    <div v-if="showRegister" class="auth-form">
+      <h2>Register</h2>
+      <form @submit.prevent="register">
+        <label>
+          CNP:
+          <input v-model="registerData.cnp" type="text" pattern="\d{13}" required />
+        </label>
+        <button type="submit">Register</button>
+        <p>Already have an account? <a @click="showRegister = false">Login</a></p>
+      </form>
+    </div>
+  </div>
+
+  <div v-else class="candidates-container">
+    <!-- Logout Button -->
+    <button class="logout-btn" @click="logout">Logout</button>
+
     <!-- Pie Chart -->
     <div class="chart-container">
-      <h2>Party Distribution</h2>
-      <Pie
-        :data="chartData"
-        :options="chartOptions"
-        class="pie-chart"
-      />
+      <h2>Vote Distribution</h2>
+      <Pie :data="chartData" :options="chartOptions" class="pie-chart" />
     </div>
 
     <!-- Main Content -->
@@ -22,6 +49,7 @@
         >
           <img :src="candidate.imageUrl" alt="Candidate Image" class="candidate-item-image" />
           <span class="candidate-name">{{ candidate.name }}</span>
+          <span class="vote-count">Votes: {{ candidate.voteCount }}</span>
         </div>
       </div>
     </div>
@@ -31,12 +59,14 @@
       <div class="popup-content" @click.stop>
         <button class="close-btn" @click="closePopup">×</button>
         <h3>{{ selectedCandidate.name }}</h3>
-        <img :src="selectedCandidate.imageUrl" alt="Candidate Image" class="candidate-image" />
+        <img :src="candidate.imageUrl" alt="Candidate Image" class="candidate-image" />
         <p><strong>Party:</strong> {{ selectedCandidate.party }}</p>
         <p><strong>Description:</strong> {{ selectedCandidate.description }}</p>
+        <p><strong>Votes:</strong> {{ selectedCandidate.voteCount }}</p>
         <div class="action-buttons">
           <button class="edit-btn" @click="startEditing">Edit</button>
           <button class="remove-btn" @click="removeCandidate">Remove</button>
+          <button class="vote-btn" @click="voteCandidate" :disabled="hasVoted">Vote</button>
         </div>
       </div>
     </div>
@@ -106,57 +136,45 @@
 </template>
 
 <script>
-import { faker } from '@faker-js/faker'
 import { Pie } from 'vue-chartjs'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
+
+const BACKEND_URL = 'https://elections-be-production.up.railway.app'
 
 export default {
   name: 'CandidatesView',
   components: { Pie },
   data() {
     return {
-      candidates: [
-        {
-          id: 1,
-          name: 'Ilie Bolojan',
-          description: 'Ilie-Gavril Bolojan is a Romanian politician serving as the president of the senate of Romania',
-          imageUrl: 'https://duckduckgo.com/i/05d55141240b08df.jpg',
-          party: 'PNL'
-        },
-        {
-          id: 2,
-          name: 'George Simion',
-          description: 'George-Nicolae Simion is a Romanian politician and civic activist. He is the founder and chairman of the Alliance for the Union of Romanians, the second largest party in both houses of parliament since 2024',
-          imageUrl: 'https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Ftse4.mm.bing.net%2Fth%3Fid%3DOIP.4oNTdHDnVOYorRvXrsRX3AHaHa%26pid%3DApi&f=1&ipt=63e0f897e1fc0eea17335beb56a7c7d40b38f3efe236ae8e4f71abc9a6e88188&ipo=images',
-          party: 'AUR'
-        },
-        {
-          id: 3,
-          name: 'Nicusor Dan',
-          description: 'Nicușor Daniel Dan is a Romanian politician, mathematician, and civic activist serving as the sixth president of Romania since 2025',
-          imageUrl: 'https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Ftse1.mm.bing.net%2Fth%3Fid%3DOIP.UzscfnrmdAZkVsR3qe8rywHaHa%26pid%3DApi&f=1&ipt=e96675aea732943c322fac2e98ded32367c96366e528116b18da695e51566394&ipo=images',
-          party: 'USR'
-        }
-      ],
+      isAuthenticated: false,
+      showRegister: false,
+      hasVoted: false,
+      loginData: {
+        cnp: '',
+      },
+      registerData: {
+        cnp: '',
+      },
+      candidates: [],
       selectedCandidate: null,
       showAddPopup: false,
       isEditing: false,
       generating: false,
-      generationInterval: null,
+      ws: null,
       newCandidate: {
         name: '',
         party: '',
         description: '',
-        imageUrl: ''
+        imageUrl: '',
       },
       editCandidate: {
         id: null,
         name: '',
         party: '',
         description: '',
-        imageUrl: ''
+        imageUrl: '',
       },
       chartOptions: {
         responsive: true,
@@ -165,23 +183,23 @@ export default {
           legend: {
             position: 'bottom',
             labels: {
-              color: '#ffffff'
-            }
-          }
-        }
-      }
+              color: '#ffffff',
+            },
+          },
+        },
+      },
     }
   },
   computed: {
     chartData() {
-      // Calculate party distribution
-      const partyCounts = this.candidates.reduce((acc, candidate) => {
-        acc[candidate.party] = (acc[candidate.party] || 0) + 1
+      // Calculate vote distribution
+      const partyVotes = this.candidates.reduce((acc, candidate) => {
+        acc[candidate.party] = (acc[candidate.party] || 0) + candidate.voteCount
         return acc
       }, {})
 
-      const labels = Object.keys(partyCounts)
-      const data = Object.values(partyCounts)
+      const labels = Object.keys(partyVotes)
+      const data = Object.values(partyVotes)
       const backgroundColors = labels.map((_, index) => {
         const colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF']
         return colors[index % colors.length]
@@ -189,16 +207,129 @@ export default {
 
       return {
         labels,
-        datasets: [{
-          data,
-          backgroundColor: backgroundColors,
-          borderColor: '#1e1e1e',
-          borderWidth: 1
-        }]
+        datasets: [
+          {
+            data,
+            backgroundColor: backgroundColors,
+            borderColor: '#1e1e1e',
+            borderWidth: 1,
+          },
+        ],
       }
-    }
+    },
   },
   methods: {
+    async login() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.loginData),
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to login')
+        const { hasVoted } = await response.json()
+        this.isAuthenticated = true
+        this.hasVoted = hasVoted
+        await this.fetchCandidates()
+        this.connectWebSocket()
+      } catch (error) {
+        console.error('Error logging in:', error)
+        alert('Login failed: ' + error.message)
+      }
+    },
+    async register() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.registerData),
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to register')
+        this.isAuthenticated = true
+        this.showRegister = false
+        await this.fetchCandidates()
+        this.connectWebSocket()
+      } catch (error) {
+        console.error('Error registering:', error)
+        alert('Registration failed: ' + error.message)
+      }
+    },
+    async logout() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/logout`, {
+          method: 'POST',
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to logout')
+        this.isAuthenticated = false
+        this.candidates = []
+        this.hasVoted = false
+        if (this.ws) {
+          this.ws.close()
+        }
+      } catch (error) {
+        console.error('Error logging out:', error)
+        alert('Logout failed: ' + error.message)
+      }
+    },
+    async fetchCandidates() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/candidates`, {
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to fetch candidates')
+        this.candidates = await response.json()
+      } catch (error) {
+        console.error('Error fetching candidates:', error)
+        this.isAuthenticated = false
+      }
+    },
+    async checkSession() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/check-session`, {
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Session check failed')
+        const { isAuthenticated, hasVoted } = await response.json()
+        this.isAuthenticated = isAuthenticated
+        this.hasVoted = hasVoted
+        if (isAuthenticated) {
+          await this.fetchCandidates()
+          this.connectWebSocket()
+        }
+      } catch (error) {
+        console.error('Error checking session:', error)
+        this.isAuthenticated = false
+      }
+    },
+    connectWebSocket() {
+      const wsUrl = BACKEND_URL.replace('http', 'ws')
+      this.ws = new WebSocket(wsUrl)
+
+      this.ws.onopen = () => {
+        console.log('WebSocket connected')
+      }
+
+      this.ws.onmessage = (event) => {
+        const message = JSON.parse(event.data)
+        if (message.type === 'candidates') {
+          this.candidates = message.data
+        }
+      }
+
+      this.ws.onclose = () => {
+        console.log('WebSocket disconnected, reconnecting...')
+        if (this.isAuthenticated) {
+          setTimeout(() => this.connectWebSocket(), 1000)
+        }
+      }
+
+      this.ws.onerror = (error) => {
+        console.error('WebSocket error:', error)
+      }
+    },
     selectCandidate(candidate) {
       this.selectedCandidate = candidate
     },
@@ -212,42 +343,90 @@ export default {
     },
     closeAddPopup() {
       this.showAddPopup = false
-    },
-    addCandidate() {
-      const newId = this.candidates.length + 1
-      this.candidates.push({
-        id: newId,
-        ...this.newCandidate
-      })
       this.newCandidate = { name: '', party: '', description: '', imageUrl: '' }
-      this.closeAddPopup()
+    },
+    async addCandidate() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/candidates`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.newCandidate),
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to add candidate')
+        this.closeAddPopup()
+      } catch (error) {
+        console.error('Error adding candidate:', error)
+        alert('Failed to add candidate: ' + error.message)
+      }
     },
     startEditing() {
       this.isEditing = true
       this.editCandidate = { ...this.selectedCandidate }
     },
-    saveEdit() {
-      const index = this.candidates.findIndex(c => c.id === this.editCandidate.id)
-      if (index !== -1) {
-        this.candidates[index] = { ...this.editCandidate }
+    async saveEdit() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/candidates/${this.editCandidate.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: this.editCandidate.name,
+            party: this.editCandidate.party,
+            description: this.editCandidate.description,
+            imageUrl: this.editCandidate.imageUrl,
+          }),
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to update candidate')
+        this.closePopup()
+      } catch (error) {
+        console.error('Error updating candidate:', error)
+        alert('Failed to update candidate: ' + error.message)
       }
-      this.closePopup()
     },
-    removeCandidate() {
-      this.candidates = this.candidates.filter(c => c.id !== this.selectedCandidate.id)
-      this.closePopup()
+    async removeCandidate() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/candidates/${this.selectedCandidate.id}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to delete candidate')
+        this.closePopup()
+      } catch (error) {
+        console.error('Error deleting candidate:', error)
+        alert('Failed to delete candidate: ' + error.message)
+      }
+    },
+    async voteCandidate() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/vote/${this.selectedCandidate.id}`, {
+          method: 'POST',
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to vote')
+        this.hasVoted = true
+        alert('Vote recorded successfully!')
+      } catch (error) {
+        console.error('Error voting:', error)
+        alert('Voting failed: ' + error.message)
+      }
+    },
+    async generateCandidate() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/candidates/generate`, {
+          method: 'POST',
+          credentials: 'include',
+        })
+        if (!response.ok) throw new Error('Failed to generate candidate')
+      } catch (error) {
+        console.error('Error generating candidate:', error)
+        alert('Failed to generate candidate: ' + error.message)
+      }
     },
     async generateCandidates() {
       while (this.generating) {
-        const newId = this.candidates.length + 1
-        this.candidates.push({
-          id: newId,
-          name: faker.person.fullName(),
-          party: faker.helpers.arrayElement(['PNL', 'AUR', 'USR', 'Independent', 'Green Party']),
-          description: faker.lorem.sentence({ min: 10, max: 20 }),
-          imageUrl: 'https://via.placeholder.com/150'
-        })
-        await new Promise(resolve => setTimeout(resolve, 3000))
+        await this.generateCandidate()
+        await new Promise((resolve) => setTimeout(resolve, 3000))
       }
     },
     startStopGeneration() {
@@ -255,14 +434,114 @@ export default {
       if (this.generating) {
         this.generateCandidates()
       }
-    }
+    },
+  },
+  mounted() {
+    this.checkSession()
   },
   beforeUnmount() {
     this.generating = false
-  }
+    if (this.ws) {
+      this.ws.close()
+    }
+  },
 }
 </script>
-
 <style scoped>
+.auth-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background-color: #1e1e1e;
+}
 
+.auth-form {
+  background-color: #2a2a2a;
+  padding: 2rem;
+  border-radius: 8px;
+  width: 300px;
+  color: #ffffff;
+}
+
+.auth-form h2 {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.auth-form label {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.auth-form input {
+  width: 100%;
+  padding: 0.5rem;
+  margin-bottom: 1rem;
+  border: none;
+  border-radius: 4px;
+  background-color: #3a3a3a;
+  color: #ffffff;
+}
+
+.auth-form button {
+  width: 100%;
+  padding: 0.5rem;
+  background-color: #36a2eb;
+  border: none;
+  border-radius: 4px;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.auth-form button:hover {
+  background-color: #2a8cd7;
+}
+
+.auth-form p {
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.auth-form a {
+  color: #36a2eb;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.logout-btn {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  padding: 0.5rem 1rem;
+  background-color: #ff6384;
+  border: none;
+  border-radius: 4px;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.vote-btn {
+  background-color: #4bc0c0;
+  color: #ffffff;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 0.5rem;
+}
+
+.vote-btn:disabled {
+  background-color: #666;
+  cursor: not-allowed;
+}
+
+.vote-count {
+  font-size: 0.8rem;
+  color: #ffffff;
+  margin-top: 0.5rem;
+  display: block;
+}
+
+/* Existing styles remain unchanged */
 </style>
