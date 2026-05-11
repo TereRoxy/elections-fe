@@ -55,11 +55,12 @@
     </div>
 
     <!-- Detail Pop-up -->
+    <!-- Detail Pop-up -->
     <div v-if="selectedCandidate && !isEditing" class="popup-overlay" @click="closePopup">
       <div class="popup-content" @click.stop>
         <button class="close-btn" @click="closePopup">×</button>
         <h3>{{ selectedCandidate.name }}</h3>
-        <img :src="candidate.imageUrl" alt="Candidate Image" class="candidate-image" />
+        <img :src="selectedCandidate.imageUrl" alt="Candidate Image" class="candidate-image" />
         <p><strong>Party:</strong> {{ selectedCandidate.party }}</p>
         <p><strong>Description:</strong> {{ selectedCandidate.description }}</p>
         <p><strong>Votes:</strong> {{ selectedCandidate.voteCount }}</p>
@@ -148,11 +149,11 @@ export default {
   components: { Pie },
   data() {
     return {
-      isAuthenticated: false,
+      isAuthenticated: false, // Will be set to true in mounted
       showRegister: false,
       hasVoted: false,
       loginData: {
-        cnp: '',
+        cnp: '1234567890123', // Simulated CNP matching backend
       },
       registerData: {
         cnp: '',
@@ -192,7 +193,6 @@ export default {
   },
   computed: {
     chartData() {
-      // Calculate vote distribution
       const partyVotes = this.candidates.reduce((acc, candidate) => {
         acc[candidate.party] = (acc[candidate.party] || 0) + candidate.voteCount
         return acc
@@ -223,12 +223,15 @@ export default {
       try {
         const response = await fetch(`${BACKEND_URL}/api/login`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
           body: JSON.stringify(this.loginData),
-          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to login')
-        const { hasVoted } = await response.json()
+        const { hasVoted, sessionId } = await response.json()
+        localStorage.setItem('sessionId', sessionId)
         this.isAuthenticated = true
         this.hasVoted = hasVoted
         await this.fetchCandidates()
@@ -238,15 +241,20 @@ export default {
         alert('Login failed: ' + error.message)
       }
     },
+
     async register() {
       try {
         const response = await fetch(`${BACKEND_URL}/api/register`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
           body: JSON.stringify(this.registerData),
-          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to register')
+        const { sessionId } = await response.json()
+        localStorage.setItem('sessionId', sessionId)
         this.isAuthenticated = true
         this.showRegister = false
         await this.fetchCandidates()
@@ -260,9 +268,12 @@ export default {
       try {
         const response = await fetch(`${BACKEND_URL}/api/logout`, {
           method: 'POST',
-          credentials: 'include',
+          headers: {
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
         })
         if (!response.ok) throw new Error('Failed to logout')
+        localStorage.removeItem('sessionId')
         this.isAuthenticated = false
         this.candidates = []
         this.hasVoted = false
@@ -274,39 +285,36 @@ export default {
         alert('Logout failed: ' + error.message)
       }
     },
-    async fetchCandidates() {
+
+    async simulateLogin() {
       try {
-        const response = await fetch(`${BACKEND_URL}/api/candidates`, {
-          credentials: 'include',
+        const response = await fetch(`${BACKEND_URL}/api/login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-ID': localStorage.getItem('sessionId') || '', // Store sessionId after login/register
+          },
+          body: JSON.stringify({ cnp: this.loginData.cnp }),
         })
-        if (!response.ok) throw new Error('Failed to fetch candidates')
-        this.candidates = await response.json()
-      } catch (error) {
-        console.error('Error fetching candidates:', error)
-        this.isAuthenticated = false
-      }
-    },
-    async checkSession() {
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/check-session`, {
-          credentials: 'include',
-        })
-        if (!response.ok) throw new Error('Session check failed')
-        const { isAuthenticated, hasVoted } = await response.json()
-        this.isAuthenticated = isAuthenticated
+        if (!response.ok) throw new Error('Failed to simulate login')
+        const { hasVoted, sessionId } = await response.json()
+        localStorage.setItem('sessionId', sessionId) // Save session ID
+        this.isAuthenticated = true
         this.hasVoted = hasVoted
-        if (isAuthenticated) {
-          await this.fetchCandidates()
-          this.connectWebSocket()
-        }
+        await this.fetchCandidates()
+        this.connectWebSocket()
       } catch (error) {
-        console.error('Error checking session:', error)
-        this.isAuthenticated = false
+        console.error('Error simulating login:', error)
+        alert('Simulated login failed: ' + error.message)
       }
     },
     connectWebSocket() {
       const wsUrl = BACKEND_URL.replace('http', 'ws')
-      this.ws = new WebSocket(wsUrl)
+      this.ws = new WebSocket(wsUrl, [], {
+        headers: {
+          'X-Session-ID': localStorage.getItem('sessionId') || '',
+        },
+      })
 
       this.ws.onopen = () => {
         console.log('WebSocket connected')
@@ -345,13 +353,30 @@ export default {
       this.showAddPopup = false
       this.newCandidate = { name: '', party: '', description: '', imageUrl: '' }
     },
+    async fetchCandidates() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/candidates`, {
+          headers: {
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
+        })
+        if (!response.ok) throw new Error('Failed to fetch candidates')
+        this.candidates = await response.json()
+      } catch (error) {
+        console.error('Error fetching candidates:', error)
+        this.isAuthenticated = false
+      }
+    },
+
     async addCandidate() {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
           body: JSON.stringify(this.newCandidate),
-          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to add candidate')
         this.closeAddPopup()
@@ -360,22 +385,21 @@ export default {
         alert('Failed to add candidate: ' + error.message)
       }
     },
-    startEditing() {
-      this.isEditing = true
-      this.editCandidate = { ...this.selectedCandidate }
-    },
+
     async saveEdit() {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates/${this.editCandidate.id}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
           body: JSON.stringify({
             name: this.editCandidate.name,
             party: this.editCandidate.party,
             description: this.editCandidate.description,
             imageUrl: this.editCandidate.imageUrl,
           }),
-          credentials: 'include',
         })
         if (!response.ok) throw new Error('Failed to update candidate')
         this.closePopup()
@@ -384,11 +408,14 @@ export default {
         alert('Failed to update candidate: ' + error.message)
       }
     },
+
     async removeCandidate() {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates/${this.selectedCandidate.id}`, {
           method: 'DELETE',
-          credentials: 'include',
+          headers: {
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
         })
         if (!response.ok) throw new Error('Failed to delete candidate')
         this.closePopup()
@@ -397,11 +424,14 @@ export default {
         alert('Failed to delete candidate: ' + error.message)
       }
     },
+
     async voteCandidate() {
       try {
         const response = await fetch(`${BACKEND_URL}/api/vote/${this.selectedCandidate.id}`, {
           method: 'POST',
-          credentials: 'include',
+          headers: {
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
         })
         if (!response.ok) throw new Error('Failed to vote')
         this.hasVoted = true
@@ -411,11 +441,14 @@ export default {
         alert('Voting failed: ' + error.message)
       }
     },
+
     async generateCandidate() {
       try {
         const response = await fetch(`${BACKEND_URL}/api/candidates/generate`, {
           method: 'POST',
-          credentials: 'include',
+          headers: {
+            'X-Session-ID': localStorage.getItem('sessionId') || '',
+          },
         })
         if (!response.ok) throw new Error('Failed to generate candidate')
       } catch (error) {
@@ -436,8 +469,9 @@ export default {
       }
     },
   },
-  mounted() {
-    this.checkSession()
+  async mounted() {
+    // Simulate login instead of checking session
+    await this.simulateLogin()
   },
   beforeUnmount() {
     this.generating = false
